@@ -44,7 +44,7 @@ workflow.add_edge("generate", END)
 agent = workflow.compile()
 
 # --- STREAMLIT UI ---
-st.title("🚀 Smart AI Agent")
+st.title("🚀 S-RAG And C-RAG")
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
