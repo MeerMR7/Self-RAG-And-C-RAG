@@ -3,7 +3,6 @@ import os
 from openai import OpenAI
 
 # Change the name of your chatbot here
-st.title("🛡️ My Secure Self-Correcting AI")
 
 # This looks for the keys you put in GitHub Secrets
 # (Make sure they are named exactly 'OPENAI_API_KEY' and 'TAVILY_API_KEY' in GitHub)
