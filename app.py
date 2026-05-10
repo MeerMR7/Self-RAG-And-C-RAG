@@ -1,90 +1,93 @@
 import streamlit as st
 import os
-from openai import OpenAI
+from openai import OpenAI  # We use the SDK as a bridge to xAI
 from langchain_community.tools.tavily_search import TavilySearchResults
 from pypdf import PdfReader
 
 # --- 1. SETUP ---
-PROJECT_NAME = "🛡️ Secure-Doc AI: Grok-Powered RAG"
-st.set_page_config(page_title=PROJECT_NAME, layout="wide")
-st.title(PROJECT_NAME)
+st.set_page_config(page_title="Grok-Doc AI", layout="wide")
+st.title("🛡️ Secure-Doc AI: Grok-Powered RAG")
 
 # --- 2. LOAD SECRETS ---
-# This version works whether you used GitHub Secrets or Streamlit Secrets
+# Ensure these names match your "Secrets" exactly
 grok_key = os.getenv("XAI_API_KEY") or st.secrets.get("XAI_API_KEY")
 tavily_key = os.getenv("TAVILY_API_KEY") or st.secrets.get("TAVILY_API_KEY")
 
 if not grok_key or not tavily_key:
-    st.error("❌ Missing API Keys! Ensure XAI_API_KEY and TAVILY_API_KEY are in your Secrets.")
+    st.error("❌ Missing Keys: Ensure XAI_API_KEY and TAVILY_API_KEY are in Secrets.")
     st.stop()
 
-# Initialize the Grok Client via OpenAI SDK compatibility
+# Initialize Grok (using OpenAI-compatible provider)
 client = OpenAI(
     api_key=grok_key,
     base_url="https://api.x.ai/v1"
 )
+
+# Initialize Tavily
 search_tool = TavilySearchResults(api_key=tavily_key, k=3)
 
-# --- 3. DIRECT FILE LOADER ---
+# --- 3. PDF LOADER ---
 PDF_FILENAME = "Academic-Policy-Manual-for-Students3.pdf"
 
-def load_my_pdf(filename):
+def load_pdf(filename):
     if os.path.exists(filename):
         try:
             reader = PdfReader(filename)
-            text = ""
-            for page in reader.pages:
-                text += page.extract_text()
-            return text
+            return "".join([page.extract_text() for page in reader.pages])
         except Exception as e:
             st.error(f"Error reading PDF: {e}")
-            return None
     return None
 
-pdf_text = load_my_pdf(PDF_FILENAME)
+pdf_text = load_pdf(PDF_FILENAME)
 
-# --- 4. SIDEBAR STATUS ---
-st.sidebar.success("🚀 Grok Engine Connected")
+# --- 4. SIDEBAR ---
+st.sidebar.success("🚀 Grok-4.3 Connected")
+st.sidebar.info("🌐 Tavily Search Active")
 if pdf_text:
-    st.sidebar.info(f"📂 Reading: {PDF_FILENAME}")
+    st.sidebar.write(f"📂 Loaded: {PDF_FILENAME}")
 else:
-    st.sidebar.error(f"❌ Could not find {PDF_FILENAME} in the folder!")
+    st.sidebar.warning("⚠️ PDF Not Found - Defaulting to Web Search only.")
 
-# --- 5. CHAT SESSION ---
+# --- 5. CHAT HISTORY ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
 # --- 6. AGENTIC LOGIC ---
-if prompt := st.chat_input("Ask me about the Academic Policy..."):
+if prompt := st.chat_input("Ask about academic policies..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.chat_message("user").markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("Grok is processing..."):
+        with st.spinner("Grok is analyzing..."):
             
-            context = ""
-            # Enhanced Context: Grok-4.3 handles massive context, 
-            # so we use a much larger slice of the PDF (approx 40 pages)
-            if pdf_text:
-                context = pdf_text[:100000] 
-                st.caption("🔍 Analyzing Document with Grok-4.3...")
-            else:
-                st.caption("🌐 PDF Missing. Grok is searching Web...")
-                web_results = search_tool.invoke({"query": prompt})
-                context = str(web_results)
+            # Context Gathering
+            doc_context = pdf_text[:80000] if pdf_text else "No document available."
+            
+            # Step 1: Search Web via Tavily for real-time validation
+            st.caption("🌐 Consulting Tavily for real-time updates...")
+            web_data = search_tool.invoke({"query": prompt})
+            
+            # Step 2: Grok Synthesis
+            system_prompt = (
+                "You are Grok-4.3. You are an expert academic advisor. "
+                "Use the PROVIDED DOCUMENT for official rules, but if the WEB SEARCH "
+                "contains more recent or conflicting dates/info, prioritize the most logical/recent answer. "
+                f"\n\nOFFICIAL DOCUMENT: {doc_context}"
+                f"\n\nWEB SEARCH RESULTS: {web_data}"
+            )
 
             try:
                 response = client.chat.completions.create(
-                    model="grok-4.3", # Using the 2026 flagship model
+                    model="grok-4.3", # 2026 Flagship Model
                     messages=[
-                        {"role": "system", "content": f"You are Grok. Use this context to answer precisely: {context}"},
+                        {"role": "system", "content": system_prompt},
                         *st.session_state.messages
                     ],
-                    temperature=0.1 # Lower temperature for factual accuracy
+                    temperature=0.2
                 )
                 
                 answer = response.choices[0].message.content
@@ -92,4 +95,4 @@ if prompt := st.chat_input("Ask me about the Academic Policy..."):
                 st.session_state.messages.append({"role": "assistant", "content": answer})
                 
             except Exception as e:
-                st.error(f"API Error: {str(e)}")
+                st.error(f"Grok API Error: {e}")
