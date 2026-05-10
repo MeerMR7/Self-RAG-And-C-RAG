@@ -36,7 +36,7 @@ def load_pdf(filename):
 pdf_text = load_pdf(PDF_FILENAME)
 
 # --- 4. VOICE INPUT SIDEBAR ---
-st.sidebar.header("🎤 Voice Command")
+st.sidebar.header("🎤 Mir Jo Awaaz")
 audio_file = st.sidebar.audio_input("Click to record your question")
 
 voice_prompt = None
