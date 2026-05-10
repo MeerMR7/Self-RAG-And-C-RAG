@@ -5,101 +5,82 @@ from langchain_community.tools.tavily_search import TavilySearchResults
 from pypdf import PdfReader
 
 # --- 1. SETUP ---
-PROJECT_NAME = "🛡️ Secure-Doc AI: Groq & Tavily RAG"
-st.set_page_config(page_title=PROJECT_NAME, layout="wide")
-st.title(PROJECT_NAME)
+st.set_page_config(page_title="Voice Groq-Doc AI", layout="wide")
+st.title("🎙️ Secure-Doc AI: Voice & Web RAG")
 
 # --- 2. LOAD SECRETS ---
-# Using the exact names from your screenshot
 groq_key = os.getenv("GROK_API_KEY") or st.secrets.get("GROK_API_KEY")
 tavily_key = os.getenv("TAVILY_API_KEY") or st.secrets.get("TAVILY_API_KEY")
 
 if not groq_key or not tavily_key:
-    st.error("❌ Missing Keys! Ensure your Secrets are named 'GROK_API_KEY' and 'TAVILY_API_KEY' exactly.")
+    st.error("❌ Missing Keys! Check your Secrets for GROK_API_KEY and TAVILY_API_KEY.")
     st.stop()
 
-# Initialize the Groq Client (using the 'gsk_' key)
-# Note: We use the OpenAI library because Groq is fully compatible
-client = OpenAI(
-    api_key=groq_key,
-    base_url="https://api.groq.com/openai/v1"
-)
-
-# Initialize Tavily Search
+client = OpenAI(api_key=groq_key, base_url="https://api.groq.com/openai/v1")
 search_tool = TavilySearchResults(api_key=tavily_key, k=3)
 
 # --- 3. PDF LOADER ---
 PDF_FILENAME = "Academic-Policy-Manual-for-Students3.pdf"
 
-def load_my_pdf(filename):
+@st.cache_data
+def load_pdf(filename):
     if os.path.exists(filename):
-        try:
-            reader = PdfReader(filename)
-            text = ""
-            for page in reader.pages:
-                text += page.extract_text()
-            return text
-        except Exception as e:
-            st.error(f"Error reading PDF: {e}")
-            return None
+        reader = PdfReader(filename)
+        return "".join([p.extract_text() for p in reader.pages])
     return None
 
-pdf_text = load_my_pdf(PDF_FILENAME)
+pdf_text = load_pdf(PDF_FILENAME)
 
-# --- 4. SIDEBAR STATUS ---
-st.sidebar.success("⚡ Groq LPU Connected")
-st.sidebar.info("🌐 Tavily Search Active")
-if pdf_text:
-    st.sidebar.write(f"📂 Document Loaded: {PDF_FILENAME}")
-else:
-    st.sidebar.warning(f"⚠️ {PDF_FILENAME} not found in the main folder.")
+# --- 4. VOICE & TEXT INPUT ---
+st.sidebar.header("🎤 Voice Input")
+audio_file = st.sidebar.audio_input("Record your question")
+
+# Transcription Logic
+voice_prompt = None
+if audio_file:
+    with st.spinner("Transcribing your voice..."):
+        transcription = client.audio.transcriptions.create(
+            file=("audio.wav", audio_file.read()),
+            model="whisper-large-v3-turbo", # Fast & Accurate
+            response_format="text"
+        )
+        voice_prompt = transcription
 
 # --- 5. CHAT SESSION ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-# --- 6. SELF-CORRECTING LOGIC ---
-if prompt := st.chat_input("Ask me about the Academic Policy..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    st.chat_message("user").markdown(prompt)
+# Determine which prompt to use (Voice takes priority if recorded)
+text_prompt = st.chat_input("Or type your question here...")
+final_prompt = voice_prompt if voice_prompt else text_prompt
+
+# --- 6. AGENTIC LOGIC ---
+if final_prompt:
+    st.session_state.messages.append({"role": "user", "content": final_prompt})
+    with st.chat_message("user"):
+        st.markdown(final_prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("Analyzing..."):
+        with st.spinner("Grok/Llama is thinking..."):
             
-            # Step A: Get Document Context (First 30k characters for Groq)
-            doc_context = pdf_text[:30000] if pdf_text else "No local document found."
+            # Context
+            doc_context = pdf_text[:30000] if pdf_text else ""
+            web_data = search_tool.invoke({"query": final_prompt})
             
-            # Step B: Get Web Context via Tavily
-            st.caption("🌐 Validating with Web Search...")
-            web_results = search_tool.invoke({"query": prompt})
-            
-            # Step C: Generate Final Answer using Groq's high-speed Llama model
             try:
                 response = client.chat.completions.create(
-                    model="llama-3.3-70b-versatile", # Current flagship on Groq
+                    model="llama-3.3-70b-versatile",
                     messages=[
-                        {
-                            "role": "system", 
-                            "content": (
-                                "You are an Academic Advisor. Answer using the Document context first. "
-                                "If the information is missing or the Web Search provides more recent "
-                                "updates (like 2025/2026 dates), use the Web results to correct the answer."
-                                f"\n\nDOCUMENT: {doc_context}"
-                                f"\n\nWEB SEARCH: {web_results}"
-                            )
-                        },
+                        {"role": "system", "content": f"Use Doc: {doc_context}\nWeb: {web_data}"},
                         *st.session_state.messages
-                    ],
-                    temperature=0.2
+                    ]
                 )
-                
                 answer = response.choices[0].message.content
                 st.markdown(answer)
                 st.session_state.messages.append({"role": "assistant", "content": answer})
-                
             except Exception as e:
-                st.error(f"Groq API Error: {str(e)}")
+                st.error(f"Error: {e}")
