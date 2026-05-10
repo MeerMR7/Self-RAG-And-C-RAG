@@ -6,7 +6,6 @@ from pypdf import PdfReader
 
 # --- 1. SETUP ---
 st.set_page_config(page_title="Voice Groq-Doc AI", layout="wide")
-st.title("🎙️ Secure-Doc AI: Voice & Web RAG")
 
 # --- 2. LOAD SECRETS ---
 groq_key = os.getenv("GROK_API_KEY") or st.secrets.get("GROK_API_KEY")
