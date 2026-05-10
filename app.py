@@ -5,23 +5,27 @@ from langchain_community.tools.tavily_search import TavilySearchResults
 from pypdf import PdfReader
 
 # --- 1. SETUP ---
-PROJECT_NAME = "🛡️ Secure-Doc AI: Self-Correcting RAG"
+PROJECT_NAME = "🛡️ Secure-Doc AI: Grok-Powered RAG"
 st.set_page_config(page_title=PROJECT_NAME, layout="wide")
 st.title(PROJECT_NAME)
 
 # --- 2. LOAD SECRETS ---
-openai_key = os.getenv("OPENAI_API_KEY")
-tavily_key = os.getenv("TAVILY_API_KEY")
+# This version works whether you used GitHub Secrets or Streamlit Secrets
+grok_key = os.getenv("XAI_API_KEY") or st.secrets.get("XAI_API_KEY")
+tavily_key = os.getenv("TAVILY_API_KEY") or st.secrets.get("TAVILY_API_KEY")
 
-if not openai_key or not tavily_key:
-    st.error("❌ Missing API Keys in GitHub Secrets! Please RESTART your Codespace.")
+if not grok_key or not tavily_key:
+    st.error("❌ Missing API Keys! Ensure XAI_API_KEY and TAVILY_API_KEY are in your Secrets.")
     st.stop()
 
-client = OpenAI(api_key=openai_key)
+# Initialize the Grok Client via OpenAI SDK compatibility
+client = OpenAI(
+    api_key=grok_key,
+    base_url="https://api.x.ai/v1"
+)
 search_tool = TavilySearchResults(api_key=tavily_key, k=3)
 
 # --- 3. DIRECT FILE LOADER ---
-# This looks for your specific file in the main directory
 PDF_FILENAME = "Academic-Policy-Manual-for-Students3.pdf"
 
 def load_my_pdf(filename):
@@ -40,11 +44,11 @@ def load_my_pdf(filename):
 pdf_text = load_my_pdf(PDF_FILENAME)
 
 # --- 4. SIDEBAR STATUS ---
-st.sidebar.success("🔑 All Systems Connected")
+st.sidebar.success("🚀 Grok Engine Connected")
 if pdf_text:
     st.sidebar.info(f"📂 Reading: {PDF_FILENAME}")
 else:
-    st.sidebar.error(f"❌ Could not find {PDF_FILENAME} in the main folder!")
+    st.sidebar.error(f"❌ Could not find {PDF_FILENAME} in the folder!")
 
 # --- 5. CHAT SESSION ---
 if "messages" not in st.session_state:
@@ -54,33 +58,38 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# --- 6. SELF-CORRECTING LOGIC ---
+# --- 6. AGENTIC LOGIC ---
 if prompt := st.chat_input("Ask me about the Academic Policy..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.chat_message("user").markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("Searching Document & Web..."):
+        with st.spinner("Grok is processing..."):
             
             context = ""
-            # Logic: If PDF is loaded, use it. Otherwise, use Web Search.
+            # Enhanced Context: Grok-4.3 handles massive context, 
+            # so we use a much larger slice of the PDF (approx 40 pages)
             if pdf_text:
-                # We give the AI the PDF text as context
-                context = pdf_text[:5000] # Taking the first 5000 characters
-                st.caption("🔍 Analyzing Document...")
+                context = pdf_text[:100000] 
+                st.caption("🔍 Analyzing Document with Grok-4.3...")
             else:
-                st.caption("🌐 PDF Missing. Searching Web...")
+                st.caption("🌐 PDF Missing. Grok is searching Web...")
                 web_results = search_tool.invoke({"query": prompt})
                 context = str(web_results)
 
-            response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": f"Use this context to answer: {context}"},
-                    *st.session_state.messages
-                ]
-            )
-            
-            answer = response.choices[0].message.content
-            st.markdown(answer)
-            st.session_state.messages.append({"role": "assistant", "content": answer})
+            try:
+                response = client.chat.completions.create(
+                    model="grok-4.3", # Using the 2026 flagship model
+                    messages=[
+                        {"role": "system", "content": f"You are Grok. Use this context to answer precisely: {context}"},
+                        *st.session_state.messages
+                    ],
+                    temperature=0.1 # Lower temperature for factual accuracy
+                )
+                
+                answer = response.choices[0].message.content
+                st.markdown(answer)
+                st.session_state.messages.append({"role": "assistant", "content": answer})
+                
+            except Exception as e:
+                st.error(f"API Error: {str(e)}")
