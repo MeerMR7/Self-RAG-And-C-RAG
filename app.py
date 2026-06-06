@@ -1,9 +1,17 @@
 import streamlit as st
 import os
-from dotenv import load_dotenv
 
-# CRITICAL FIX: Load .env BEFORE importing modules that read env vars at import time
-load_dotenv()
+# ═══════════════════════════════════════════════════════════════════════════════
+# CRITICAL FIX for Streamlit Secrets / Streamlit Cloud
+# Streamlit secrets are NOT automatically environment variables. rag_pipeline.py
+# creates Groq & Tavily clients at import time, so we must inject the keys into
+# os.environ BEFORE importing that module.
+# ═══════════════════════════════════════════════════════════════════════════════
+os.environ["GROQ_API_KEY"]   = st.secrets.get("GROQ_API_KEY",   os.getenv("GROQ_API_KEY", ""))
+os.environ["TAVILY_API_KEY"] = st.secrets.get("TAVILY_API_KEY", os.getenv("TAVILY_API_KEY", ""))
+
+from dotenv import load_dotenv
+load_dotenv()  # fallback for local development
 
 from rag_pipeline import run_pipeline
 from ingest import ingest_documents
