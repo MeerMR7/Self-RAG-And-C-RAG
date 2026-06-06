@@ -1,186 +1,206 @@
 import os
+from dotenv import load_dotenv
+from typing import List, TypedDict
+from functools import lru_cache
 
-# ── Load secrets (Streamlit Cloud) or .env (local) ────────────────────────────
-try:
-    import streamlit as st
-    if hasattr(st, "secrets"):
-        for key, val in st.secrets.items():
-            os.environ[key] = str(val)
-except Exception:
-    pass
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except Exception:
-    pass
-# ──────────────────────────────────────────────────────────────────────────────
-
-from typing import TypedDict, List
 from langchain_groq import ChatGroq
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.vectorstores import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import StateGraph, END
 
+# ── Config ───────────────────────────────────────────────────────────────────
 CHROMA_DIR  = "./chroma_db"
 EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
-llm             = ChatGroq(model="llama3-8b-8192", api_key=os.getenv("GROQ_API_KEY"), temperature=0)
-web_search_tool = TavilySearchResults(api_key=os.getenv("TAVILY_API_KEY"), max_results=3)
+# ── Lazy initialisation (never crashes on import) ────────────────────────────
+@lru_cache(maxsize=1)
+def _get_llm():
+    key = os.environ.get("GROQ_API_KEY")
+    if not key:
+        raise RuntimeError(
+            "GROQ_API_KEY is missing. "
+            "Add it to Streamlit Secrets (or your .env file for local runs)."
+        )
+    return ChatGroq(model="llama3-8b-8192", api_key=key)
 
-# ── State ──────────────────────────────────────────────────────────────────────
-class RAGState(TypedDict):
-    question:       str
-    documents:      List[Document]
-    generation:     str
-    workflow_steps: List[str]
-    web_searched:   bool
+@lru_cache(maxsize=1)
+def _get_web_search_tool():
+    key = os.environ.get("TAVILY_API_KEY")
+    if not key:
+        raise RuntimeError(
+            "TAVILY_API_KEY is missing. "
+            "Add it to Streamlit Secrets (or your .env file for local runs)."
+        )
+    return TavilySearchResults(api_key=key)
 
-# ── Nodes ──────────────────────────────────────────────────────────────────────
-def load_vectorstore():
-    embeddings  = HuggingFaceEmbeddings(model_name=EMBED_MODEL, model_kwargs={"device": "cpu"})
-    vectorstore = Chroma(persist_directory=CHROMA_DIR, embedding_function=embeddings, collection_name="rag_documents")
+@lru_cache(maxsize=1)
+def _get_retriever():
+    embedding = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
+    vectorstore = Chroma(persist_directory=CHROMA_DIR, embedding_function=embedding)
     return vectorstore.as_retriever(search_kwargs={"k": 4})
 
-def retrieve(state):
-    steps = state.get("workflow_steps", [])
-    steps.append("📥 Retrieving relevant documents from vector store...")
-    try:
-        retriever = load_vectorstore()
-        docs      = retriever.invoke(state["question"])
-    except Exception:
-        docs = []
-        steps.append("⚠️ No documents found — will use web search.")
-    return {**state, "documents": docs, "workflow_steps": steps}
+# ── State ────────────────────────────────────────────────────────────────────
+class GraphState(TypedDict):
+    question: str
+    generation: str
+    documents: List[Document]
+    workflow_steps: List[str]
+    tries: int
 
-def grade_documents(state):
-    steps = state["workflow_steps"]
-    steps.append("🔍 Evaluating document relevance (Self-RAG grader)...")
-    if not state["documents"]:
-        return {**state, "documents": [], "workflow_steps": steps}
-    grade_prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are a relevance grader. Reply only 'yes' or 'no'."),
-        ("human",  "Question: {question}\nDocument: {document}\nIs this relevant?")
-    ])
-    grader       = grade_prompt | llm
-    relevant_docs = []
-    for doc in state["documents"]:
-        try:
-            result = grader.invoke({"question": state["question"], "document": doc.page_content[:500]})
-            if "yes" in result.content.lower():
-                relevant_docs.append(doc)
-        except Exception:
-            relevant_docs.append(doc)
-    steps.append(f"✅ {len(relevant_docs)}/{len(state['documents'])} documents passed relevance check.")
-    return {**state, "documents": relevant_docs, "workflow_steps": steps}
-
-def rewrite_query(state):
-    steps = state["workflow_steps"]
-    steps.append("✏️ Weak context — rewriting query for better retrieval...")
-    rewrite_prompt = ChatPromptTemplate.from_messages([
-        ("system", "Rewrite this question to be more specific. Return only the rewritten question."),
-        ("human",  "Question: {question}")
-    ])
-    try:
-        result = (rewrite_prompt | llm).invoke({"question": state["question"]})
-        steps.append(f"✏️ Rewritten: '{result.content.strip()}'")
-        return {**state, "question": result.content.strip(), "workflow_steps": steps}
-    except Exception:
-        return {**state, "workflow_steps": steps}
-
-def web_search(state):
-    steps = state["workflow_steps"]
-    steps.append("🌐 Executing web search fallback via Tavily...")
-    try:
-        results  = web_search_tool.invoke({"query": state["question"]})
-        web_docs = [
-            Document(page_content=r["content"], metadata={"source": r["url"], "type": "web"})
-            for r in results if "content" in r
-        ]
-        steps.append(f"🌐 Web search returned {len(web_docs)} results.")
-        return {**state, "documents": state.get("documents", []) + web_docs,
-                "workflow_steps": steps, "web_searched": True}
-    except Exception as e:
-        steps.append(f"❌ Web search failed: {e}")
-        return {**state, "workflow_steps": steps, "web_searched": True}
-
-def generate(state):
-    steps   = state["workflow_steps"]
-    steps.append("💬 Generating final answer from grounded context...")
-    context = (
-        "\n\n".join([f"[Source {i+1}]: {doc.page_content}" for i, doc in enumerate(state["documents"])])
-        if state["documents"] else "No context found."
+# ── Prompts / Chains (use lazy getters) ──────────────────────────────────────
+def _retrieval_grader():
+    return (
+        ChatPromptTemplate.from_messages([
+            ("system", "You are a grader assessing relevance of a retrieved document to a user question. If the document contains keyword(s) or semantic meaning related to the question, grade it as relevant. Give a binary score 'yes' or 'no'."),
+            ("human", "Document:\n{document}\n\nQuestion:\n{question}")
+        ])
+        | _get_llm()
+        | StrOutputParser()
     )
-    generate_prompt = ChatPromptTemplate.from_messages([
-        ("system", "Answer the question using the context. Be accurate and concise."),
-        ("human",  "Context:\n{context}\n\nQuestion: {question}\n\nAnswer:")
-    ])
-    try:
-        result = (generate_prompt | llm).invoke({"context": context, "question": state["question"]})
-        return {**state, "generation": result.content, "workflow_steps": steps}
-    except Exception as e:
-        return {**state, "generation": f"Error: {e}", "workflow_steps": steps}
 
-def check_hallucination(state):
+def _hallucination_grader():
+    return (
+        ChatPromptTemplate.from_messages([
+            ("system", "You are a grader assessing whether an answer is grounded in / supported by a set of facts. Give a binary score 'yes' or 'no'."),
+            ("human", "Facts:\n{documents}\n\nAnswer:\n{generation}")
+        ])
+        | _get_llm()
+        | StrOutputParser()
+    )
+
+def _answer_grader():
+    return (
+        ChatPromptTemplate.from_messages([
+            ("system", "You are a grader assessing whether an answer is useful to resolve a question. Give a binary score 'yes' or 'no'."),
+            ("human", "Question:\n{question}\n\nAnswer:\n{generation}")
+        ])
+        | _get_llm()
+        | StrOutputParser()
+    )
+
+def _rag_chain():
+    return (
+        ChatPromptTemplate.from_messages([
+            ("system", "You are an assistant for question-answering tasks. Use the retrieved context to answer the question. If you don't know, say you don't know. Keep it concise (3 sentences max)."),
+            ("human", "Question:\n{question}\n\nContext:\n{context}\n\nAnswer:")
+        ])
+        | _get_llm()
+        | StrOutputParser()
+    )
+
+# ── Nodes ────────────────────────────────────────────────────────────────────
+def retrieve(state: GraphState):
+    docs = _get_retriever().invoke(state["question"])
+    state["workflow_steps"].append(f"🔍 Retrieved {len(docs)} documents from vector store.")
+    return {"documents": docs, "question": state["question"], "workflow_steps": state["workflow_steps"], "tries": state.get("tries", 0)}
+
+def grade_documents(state: GraphState):
+    docs = state["documents"]
+    q = state["question"]
     steps = state["workflow_steps"]
-    steps.append("🛡️ Checking for hallucinations & evaluating answer quality...")
-    if not state["documents"]:
-        steps.append("⚠️ Skipped — no context available.")
-        return {**state, "workflow_steps": steps}
-    context = "\n\n".join([doc.page_content for doc in state["documents"][:3]])
-    hallucination_prompt = ChatPromptTemplate.from_messages([
-        ("system", "Is the answer grounded in the context? Reply only 'yes' or 'no'."),
-        ("human",  "Context: {context}\n\nAnswer: {answer}")
-    ])
-    try:
-        result = (hallucination_prompt | llm).invoke({
-            "context": context[:1500],
-            "answer":  state["generation"][:500]
-        })
-        if "yes" in result.content.lower():
-            steps.append("✅ Answer is grounded. No hallucinations detected.")
+    filtered = []
+    grader = _retrieval_grader()
+    for d in docs:
+        score = grader.invoke({"document": d.page_content, "question": q})
+        if "yes" in score.lower():
+            filtered.append(d)
+    steps.append(f"📊 Graded documents: {len(filtered)}/{len(docs)} relevant.")
+    return {"documents": filtered, "question": q, "workflow_steps": steps, "tries": state.get("tries", 0)}
+
+def generate(state: GraphState):
+    q = state["question"]
+    docs = state["documents"]
+    steps = state["workflow_steps"]
+    tries = state.get("tries", 0) + 1
+    context = "\n\n".join([d.page_content for d in docs]) if docs else "No relevant context found."
+    generation = _rag_chain().invoke({"question": q, "context": context})
+    steps.append(f"✍️ Generated answer (attempt {tries}).")
+    return {"documents": docs, "question": q, "generation": generation, "workflow_steps": steps, "tries": tries}
+
+def web_search(state: GraphState):
+    q = state["question"]
+    steps = state["workflow_steps"]
+    results = _get_web_search_tool().invoke({"query": q})
+    web_docs = []
+    for r in results:
+        if isinstance(r, dict):
+            content = r.get("content", r.get("snippet", ""))
+            url = r.get("url", "Web Search")
+            web_docs.append(Document(page_content=content, metadata={"source": url}))
+    steps.append(f"🌐 Web search returned {len(web_docs)} results.")
+    return {"documents": web_docs, "question": q, "workflow_steps": steps, "tries": state.get("tries", 0)}
+
+def grade_generation(state: GraphState):
+    q = state["question"]
+    docs = state["documents"]
+    gen = state["generation"]
+    steps = state["workflow_steps"]
+    tries = state.get("tries", 0)
+
+    # Prevent infinite loops
+    if tries >= 2:
+        steps.append("⏹️ Max retries reached. Returning best-effort answer.")
+        return {"documents": docs, "question": q, "generation": gen, "workflow_steps": steps, "tries": tries, "grounded": True, "useful": True}
+
+    if not docs:
+        steps.append("⚠️ No documents to ground against. Skipping hallucination check.")
+        return {"documents": docs, "question": q, "generation": gen, "workflow_steps": steps, "tries": tries, "grounded": True, "useful": True}
+
+    h_score = _hallucination_grader().invoke({"documents": "\n\n".join([d.page_content for d in docs]), "generation": gen})
+    if "yes" in h_score.lower():
+        steps.append("✅ Answer is grounded in documents.")
+        a_score = _answer_grader().invoke({"question": q, "generation": gen})
+        if "yes" in a_score.lower():
+            steps.append("✅ Answer is useful.")
+            return {"documents": docs, "question": q, "generation": gen, "workflow_steps": steps, "tries": tries, "grounded": True, "useful": True}
         else:
-            steps.append("⚠️ Potential hallucination detected.")
-    except Exception as e:
-        steps.append(f"⚠️ Check skipped: {e}")
-    return {**state, "workflow_steps": steps}
+            steps.append("❌ Answer is not useful. Triggering corrective retrieval.")
+            return {"documents": docs, "question": q, "generation": gen, "workflow_steps": steps, "tries": tries, "grounded": True, "useful": False}
+    else:
+        steps.append("❌ Answer is not grounded / hallucinated. Triggering corrective retrieval.")
+        return {"documents": docs, "question": q, "generation": gen, "workflow_steps": steps, "tries": tries, "grounded": False}
+
+# ── Edges ────────────────────────────────────────────────────────────────────
+def decide_to_generate(state: GraphState):
+    return "generate" if state["documents"] else "web_search"
+
+def decide_after_generation(state: GraphState):
+    if state.get("grounded") and state.get("useful"):
+        return END
+    return "web_search"
 
 # ── Graph ──────────────────────────────────────────────────────────────────────
-def decide_after_grading(state):
-    return "rewrite_query" if not state["documents"] else "generate"
+workflow = StateGraph(GraphState)
+workflow.add_node("retrieve", retrieve)
+workflow.add_node("grade_documents", grade_documents)
+workflow.add_node("generate", generate)
+workflow.add_node("web_search", web_search)
+workflow.add_node("grade_generation", grade_generation)
 
-def build_graph():
-    graph = StateGraph(RAGState)
-    graph.add_node("retrieve",           retrieve)
-    graph.add_node("grade_documents",    grade_documents)
-    graph.add_node("rewrite_query",      rewrite_query)
-    graph.add_node("web_search",         web_search)
-    graph.add_node("generate",           generate)
-    graph.add_node("check_hallucination",check_hallucination)
-    graph.set_entry_point("retrieve")
-    graph.add_edge("retrieve", "grade_documents")
-    graph.add_conditional_edges(
-        "grade_documents",
-        decide_after_grading,
-        {"rewrite_query": "rewrite_query", "generate": "generate"}
-    )
-    graph.add_edge("rewrite_query",       "web_search")
-    graph.add_edge("web_search",          "generate")
-    graph.add_edge("generate",            "check_hallucination")
-    graph.add_edge("check_hallucination", END)
-    return graph.compile()
+workflow.set_entry_point("retrieve")
+workflow.add_edge("retrieve", "grade_documents")
+workflow.add_conditional_edges("grade_documents", decide_to_generate, {"generate": "generate", "web_search": "web_search"})
+workflow.add_edge("web_search", "generate")
+workflow.add_edge("generate", "grade_generation")
+workflow.add_conditional_edges("grade_generation", decide_after_generation, {"web_search": "web_search", END: END})
 
-# ── Public entry point ─────────────────────────────────────────────────────────
-def run_pipeline(question: str) -> dict:
-    app    = build_graph()
-    result = app.invoke(RAGState(
-        question=question,
-        documents=[],
-        generation="",
-        workflow_steps=[],
-        web_searched=False
-    ))
-    return result
+_app = workflow.compile()
+
+# ── Public API ───────────────────────────────────────────────────────────────
+def run_pipeline(question: str):
+    result = _app.invoke({
+        "question": question,
+        "generation": "",
+        "documents": [],
+        "workflow_steps": [],
+        "tries": 0
+    })
+    return {
+        "generation": result["generation"],
+        "documents": result["documents"],
+        "workflow_steps": result["workflow_steps"]
+    }
