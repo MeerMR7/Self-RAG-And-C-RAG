@@ -1,10 +1,12 @@
 import streamlit as st
 import os
 from dotenv import load_dotenv
+
+# CRITICAL FIX: Load .env BEFORE importing modules that read env vars at import time
+load_dotenv()
+
 from rag_pipeline import run_pipeline
 from ingest import ingest_documents
-
-load_dotenv()
 
 st.set_page_config(page_title="Smart Self-Correcting AI", page_icon="🧠", layout="wide")
 
