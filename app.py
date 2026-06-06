@@ -1,103 +1,102 @@
 import streamlit as st
 import os
-from openai import OpenAI
-from langchain_community.tools.tavily_search import TavilySearchResults
-from pypdf import PdfReader
+from dotenv import load_dotenv
+from rag_pipeline import run_pipeline
+from ingest import ingest_documents
 
-# --- 1. SETUP ---
-st.set_page_config(page_title="Voice Groq-Doc AI", layout="wide")
-st.title("🎙️ Secure-Doc AI: Voice & Web RAG")
+load_dotenv()
 
-# --- 2. LOAD SECRETS ---
-# Match the exact names from your screenshot
-groq_key = os.getenv("GROK_API_KEY") or st.secrets.get("GROK_API_KEY")
-tavily_key = os.getenv("TAVILY_API_KEY") or st.secrets.get("TAVILY_API_KEY")
+st.set_page_config(page_title="Smart Self-Correcting AI", page_icon="🧠", layout="wide")
 
-if not groq_key or not tavily_key:
-    st.error("❌ Missing Keys! Ensure Secrets are named 'GROK_API_KEY' and 'TAVILY_API_KEY'.")
-    st.stop()
+st.markdown("""
+<style>
+.stApp { background-color: #0f0f0f; color: #f0f0f0; }
+.step-box { background: #1a1a2e; border-left: 3px solid #4a9eff; padding: 8px 12px; margin: 4px 0; border-radius: 4px; font-size: 0.85em; color: #b0c4de; }
+</style>
+""", unsafe_allow_html=True)
 
-client = OpenAI(api_key=groq_key, base_url="https://api.groq.com/openai/v1")
-search_tool = TavilySearchResults(api_key=tavily_key, k=2)
+with st.sidebar:
+    st.title("🧠 Smart RAG AI")
+    st.caption("Self-RAG · CRAG · LangGraph")
+    st.divider()
 
-# --- 3. PDF LOADER ---
-PDF_FILENAME = "Academic-Policy-Manual-for-Students3.pdf"
+    st.subheader("📁 Upload Documents")
+    uploaded_files = st.file_uploader("Upload PDF or TXT files", type=["pdf", "txt"], accept_multiple_files=True)
 
-@st.cache_data
-def load_pdf(filename):
-    if os.path.exists(filename):
-        try:
-            reader = PdfReader(filename)
-            return "".join([p.extract_text() for p in reader.pages])
-        except Exception:
-            return None
-    return None
+    if uploaded_files:
+        os.makedirs("./documents", exist_ok=True)
+        for f in uploaded_files:
+            with open(f"./documents/{f.name}", "wb") as out:
+                out.write(f.getbuffer())
+        st.success(f"✅ {len(uploaded_files)} file(s) uploaded!")
 
-pdf_text = load_pdf(PDF_FILENAME)
+    if st.button("⚙️ Process Documents", type="primary", use_container_width=True):
+        with st.spinner("Processing..."):
+            try:
+                ingest_documents()
+                st.success("✅ Documents stored in ChromaDB!")
+            except Exception as e:
+                st.error(f"❌ Error: {e}")
 
-# --- 4. VOICE INPUT SIDEBAR ---
-st.sidebar.header("🎤 Mir Jo Awaaz")
-audio_file = st.sidebar.audio_input("Click to record your question")
+    st.divider()
+    st.markdown("**Model:** Llama3-8b (Groq)  \n**Vector DB:** ChromaDB  \n**Web Search:** Tavily  \n**Framework:** LangGraph")
+    st.divider()
 
-voice_prompt = None
-if audio_file:
-    try:
-        with st.spinner("Transcribing..."):
-            transcription = client.audio.transcriptions.create(
-                file=("audio.wav", audio_file.read()),
-                model="whisper-large-v3-turbo",
-                response_format="text"
-            )
-            voice_prompt = transcription
-    except Exception as e:
-        st.sidebar.error(f"Voice Error: {e}")
+    if st.button("🗑️ Clear Chat", use_container_width=True):
+        st.session_state.messages = []
+        st.rerun()
 
-# --- 5. CHAT SESSION ---
+st.title("🧠 Smart Self-Correcting AI")
+st.caption("Powered by Self-RAG & CRAG — watch the AI think, verify, and correct itself")
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        if message["role"] == "assistant":
+            if message.get("workflow_steps"):
+                with st.expander("🔄 Reasoning Steps", expanded=False):
+                    for step in message["workflow_steps"]:
+                        st.markdown(f'<div class="step-box">{step}</div>', unsafe_allow_html=True)
+            st.markdown(message["content"])
+            if message.get("sources"):
+                with st.expander("📚 Sources", expanded=False):
+                    seen = set()
+                    for doc in message["sources"]:
+                        src = doc.metadata.get("source", "Vector Store")
+                        if src not in seen:
+                            seen.add(src)
+                            st.markdown(f"📄 `{src}`")
+        else:
+            st.markdown(message["content"])
 
-text_input = st.chat_input("Or type your message here...")
-# Use voice if available, otherwise use text
-final_prompt = voice_prompt if voice_prompt else text_input
-
-# --- 6. OPTIMIZED LOGIC ---
-if final_prompt:
-    st.session_state.messages.append({"role": "user", "content": final_prompt})
+if prompt := st.chat_input("Ask anything..."):
+    st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
-        st.markdown(final_prompt)
+        st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("Processing..."):
-            # Limit PDF text to 8k characters to avoid 429 Errors
-            context = pdf_text[:8000] if pdf_text else "No document found."
-            
+        with st.spinner("🤔 Running Self-RAG + CRAG Pipeline..."):
             try:
-                # Search the web
-                web_data = search_tool.invoke({"query": final_prompt})
-                
-                # Use Llama-3.1-8b for MUCH higher rate limits
-                response = client.chat.completions.create(
-                    model="llama-3.1-8b-instant", 
-                    messages=[
-                        {
-                            "role": "system", 
-                            "content": f"You are a helpful assistant. Use this Doc: {context}\n\nWeb info: {web_data}"
-                        },
-                        *st.session_state.messages
-                    ],
-                    max_tokens=500
-                )
-                
-                answer = response.choices[0].message.content
-                st.markdown(answer)
-                st.session_state.messages.append({"role": "assistant", "content": answer})
-                
+                result = run_pipeline(prompt)
+                with st.expander("🔄 Reasoning Steps", expanded=True):
+                    for step in result["workflow_steps"]:
+                        st.markdown(f'<div class="step-box">{step}</div>', unsafe_allow_html=True)
+                st.markdown(result["generation"])
+                if result["documents"]:
+                    with st.expander("📚 Sources", expanded=False):
+                        seen = set()
+                        for doc in result["documents"]:
+                            src = doc.metadata.get("source", "Vector Store")
+                            if src not in seen:
+                                seen.add(src)
+                                st.markdown(f"📄 `{src}`")
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": result["generation"],
+                    "workflow_steps": result["workflow_steps"],
+                    "sources": result["documents"]
+                })
             except Exception as e:
-                if "429" in str(e):
-                    st.error("⚠️ Rate limit hit. I've switched to a smaller model to help, but Groq's free tier is busy. Try again in a minute!")
-                else:
-                    st.error(f"Error: {e}")
+                st.error(f"❌ Error: {e}")
