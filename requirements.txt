@@ -5,7 +5,6 @@ langchain-groq
 langchain-community
 langgraph
 chromadb
-openai
 tavily-python
 faiss-cpu
 python-dotenv
