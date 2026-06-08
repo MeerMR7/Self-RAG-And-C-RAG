@@ -153,21 +153,6 @@ with st.sidebar:
     st.caption("Self-RAG · CRAG · LangGraph")
     st.divider()
 
-    st.markdown("### 📁 Upload Documents")
-    uploaded_files = st.file_uploader(
-        "Upload PDF or TXT files",
-        type=["pdf", "txt"],
-        accept_multiple_files=True,
-        label_visibility="collapsed"
-    )
-
-    if uploaded_files:
-        os.makedirs("./data", exist_ok=True)
-        for f in uploaded_files:
-            with open(f"./data/{f.name}", "wb") as out:
-                out.write(f.getbuffer())
-        st.success(f"✅ {len(uploaded_files)} file(s) saved!")
-
     if st.button("⚙️ Process Documents", type="primary", use_container_width=True):
         with st.spinner("Processing documents..."):
             try:
