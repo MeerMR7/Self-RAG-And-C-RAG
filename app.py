@@ -17,7 +17,8 @@ st.set_page_config(
     page_icon="🧠",
     layout="wide",
     initial_sidebar_state="expanded"
-)if not os.path.exists("./chroma_db"):
+)
+if not os.path.exists("./chroma_db"):
     with st.spinner("⚙️ Building knowledge base..."):
         ingest_documents()
 
