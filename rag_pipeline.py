@@ -25,7 +25,7 @@ def _get_llm():
             "GROQ_API_KEY is missing. "
             "Add it to Streamlit Secrets (or your .env file for local runs)."
         )
-    return ChatGroq(model="llama3-8b-8192", api_key=key)
+    return ChatGroq(model="llama-3.1-8b-instant", api_key=key)
 
 @lru_cache(maxsize=1)
 def _get_web_search_tool():
