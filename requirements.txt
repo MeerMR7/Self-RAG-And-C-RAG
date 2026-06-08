@@ -3,7 +3,9 @@ langchain
 langchain-openai
 langchain-groq
 langchain-community
+langchain-huggingface
 langgraph
+sentence-transformers
 chromadb
 tavily-python
 faiss-cpu
