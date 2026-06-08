@@ -13,3 +13,4 @@ faiss-cpu
 python-dotenv
 tiktoken
 pypdf
+protobuf==3.20.3
