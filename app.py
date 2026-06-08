@@ -11,6 +11,15 @@ load_dotenv()
 from rag_pipeline import run_pipeline
 from ingest import ingest_documents
 
+# ── Auto-ingest if chroma_db missing ─────────────────────────────────────────
+if not os.path.exists("./chroma_db"):
+    with st.spinner("⚙️ Building knowledge base from documents..."):
+        try:
+            ingest_documents()
+            st.success("✅ Knowledge base ready!")
+        except Exception as e:
+            st.warning(f"⚠️ Auto-ingest failed: {e}")
+
 # ── Page Config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Smart Self-Correcting AI",
@@ -18,9 +27,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-if not os.path.exists("./chroma_db"):
-    with st.spinner("⚙️ Building knowledge base..."):
-        ingest_documents()
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -112,6 +118,24 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     background-color: #2563eb;
 }
 
+/* Fix white box at bottom */
+.stChatFloatingInputContainer {
+    background-color: #0d0d0d !important;
+    border-top: 1px solid #222 !important;
+}
+
+/* Fix input field */
+.stChatInputContainer {
+    background-color: #1e1e1e !important;
+    border: 1px solid #333 !important;
+    border-radius: 12px !important;
+}
+
+/* Force dark background everywhere */
+.main, .block-container {
+    background-color: #0d0d0d !important;
+}
+
 /* Success/Error */
 .stSuccess { background-color: #052e16 !important; }
 .stError { background-color: #2d0a0a !important; }
@@ -122,15 +146,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
 </style>
 """, unsafe_allow_html=True)
-
-# ── Auto-ingest if chroma_db missing ─────────────────────────────────────────
-if not os.path.exists("./chroma_db"):
-    with st.spinner("⚙️ Building knowledge base from documents..."):
-        try:
-            ingest_documents()
-            st.success("✅ Knowledge base ready!")
-        except Exception as e:
-            st.warning(f"⚠️ Auto-ingest failed: {e}. You can manually process documents from the sidebar.")
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -180,11 +195,11 @@ st.markdown("## 🧠 Smart Self-Correcting AI")
 st.caption("Powered by Self-RAG & CRAG — watch the AI think, verify, and correct itself")
 st.divider()
 
-# Init session state
+# ── Init session state ────────────────────────────────────────────────────────
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Welcome message
+# ── Welcome message ───────────────────────────────────────────────────────────
 if not st.session_state.messages:
     st.markdown("""
     <div style="text-align:center; padding: 60px 20px; color: #555;">
@@ -194,7 +209,7 @@ if not st.session_state.messages:
     </div>
     """, unsafe_allow_html=True)
 
-# Display chat history
+# ── Display chat history ──────────────────────────────────────────────────────
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         if message["role"] == "assistant":
@@ -216,26 +231,21 @@ for message in st.session_state.messages:
 
 # ── Chat Input ────────────────────────────────────────────────────────────────
 if prompt := st.chat_input("Ask anything..."):
-    # Add user message
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Generate response
     with st.chat_message("assistant"):
         with st.spinner("🤔 Thinking..."):
             try:
                 result = run_pipeline(prompt)
 
-                # Show reasoning steps expanded
                 with st.expander("🔄 Reasoning Steps", expanded=True):
                     for step in result["workflow_steps"]:
                         st.markdown(f'<div class="step-box">{step}</div>', unsafe_allow_html=True)
 
-                # Show answer
                 st.markdown(result["generation"])
 
-                # Show sources
                 if result["documents"]:
                     with st.expander("📚 Sources", expanded=False):
                         seen = set()
@@ -245,7 +255,6 @@ if prompt := st.chat_input("Ask anything..."):
                                 seen.add(src)
                                 st.markdown(f'<div class="source-box">📄 {src}</div>', unsafe_allow_html=True)
 
-                # Save to history
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": result["generation"],
