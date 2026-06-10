@@ -27,7 +27,7 @@ def _get_llm():
             "Add it to Streamlit Secrets (or your .env file for local runs)."
         )
     return ChatGoogleGenerativeAI(
-        model="gemini-2.0-flash",
+        model="model="gemini-1.5-flash-8b"",
         google_api_key=key,
         max_output_tokens=500,
         temperature=0.1,
