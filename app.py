@@ -2,8 +2,9 @@ import streamlit as st
 import os
 
 # ── Inject secrets before any imports ────────────────────────────────────────
-os.environ["GROQ_API_KEY"]   = st.secrets.get("GROQ_API_KEY",   os.getenv("GROQ_API_KEY", ""))
-os.environ["TAVILY_API_KEY"] = st.secrets.get("TAVILY_API_KEY", os.getenv("TAVILY_API_KEY", ""))
+os.environ["GOOGLE_API_KEY"]  = st.secrets.get("GOOGLE_API_KEY",  os.getenv("GOOGLE_API_KEY", ""))
+os.environ["TAVILY_API_KEY"]  = st.secrets.get("TAVILY_API_KEY",  os.getenv("TAVILY_API_KEY", ""))
+os.environ["GROQ_API_KEY"]    = st.secrets.get("GROQ_API_KEY",    os.getenv("GROQ_API_KEY", ""))
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -31,20 +32,14 @@ st.set_page_config(
 # ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-/* Global */
 html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .stApp { background-color: #0d0d0d; color: #ececec; }
-
-/* Hide Streamlit branding */
 #MainMenu, footer, header { visibility: hidden; }
 
-/* Sidebar */
 [data-testid="stSidebar"] {
     background-color: #111111;
     border-right: 1px solid #222;
 }
-
-/* Chat messages */
 [data-testid="stChatMessage"] {
     background-color: #1a1a1a;
     border-radius: 12px;
@@ -52,8 +47,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     margin-bottom: 8px;
     border: 1px solid #2a2a2a;
 }
-
-/* Chat input fixed at bottom */
 [data-testid="stChatInput"] {
     position: fixed;
     bottom: 0;
@@ -62,8 +55,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     border-top: 1px solid #222;
     z-index: 999;
 }
-
-/* Input box */
 [data-testid="stChatInput"] textarea {
     background-color: #1e1e1e !important;
     border: 1px solid #333 !important;
@@ -71,11 +62,7 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     color: #fff !important;
     font-size: 15px !important;
 }
-
-/* Add bottom padding so messages don't hide behind input */
 [data-testid="stVerticalBlock"] { padding-bottom: 100px; }
-
-/* Reasoning step boxes */
 .step-box {
     background: #161b2e;
     border-left: 3px solid #3b82f6;
@@ -86,8 +73,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     color: #93c5fd;
     font-family: 'Courier New', monospace;
 }
-
-/* Source boxes */
 .source-box {
     background: #1a1a1a;
     border: 1px solid #2d2d2d;
@@ -97,15 +82,11 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     font-size: 0.82em;
     color: #86efac;
 }
-
-/* Expander styling */
 [data-testid="stExpander"] {
     background-color: #161616;
     border: 1px solid #2a2a2a;
     border-radius: 8px;
 }
-
-/* Buttons */
 .stButton > button {
     background-color: #1d4ed8;
     color: white;
@@ -114,33 +95,19 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     font-weight: 600;
     transition: background 0.2s;
 }
-.stButton > button:hover {
-    background-color: #2563eb;
-}
-
-/* Fix white box at bottom */
+.stButton > button:hover { background-color: #2563eb; }
 .stChatFloatingInputContainer {
     background-color: #0d0d0d !important;
     border-top: 1px solid #222 !important;
 }
-
-/* Fix input field */
 .stChatInputContainer {
     background-color: #1e1e1e !important;
     border: 1px solid #333 !important;
     border-radius: 12px !important;
 }
-
-/* Force dark background everywhere */
-.main, .block-container {
-    background-color: #0d0d0d !important;
-}
-
-/* Success/Error */
+.main, .block-container { background-color: #0d0d0d !important; }
 .stSuccess { background-color: #052e16 !important; }
 .stError { background-color: #2d0a0a !important; }
-
-/* Scrollbar */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: #111; }
 ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
@@ -164,7 +131,7 @@ with st.sidebar:
     st.divider()
     st.markdown("""
     **Pipeline Info**
-    - 🤖 Model: `llama-3.1-8b-instant`
+    - 🤖 Model: `Gemini 1.5 Flash`
     - 🗄️ Vector DB: `ChromaDB`
     - 🌐 Web Search: `Tavily`
     - 🔗 Framework: `LangGraph`
@@ -180,11 +147,9 @@ st.markdown("## 🧠 Smart Self-Correcting AI")
 st.caption("Powered by Self-RAG & CRAG — watch the AI think, verify, and correct itself")
 st.divider()
 
-# ── Init session state ────────────────────────────────────────────────────────
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# ── Welcome message ───────────────────────────────────────────────────────────
 if not st.session_state.messages:
     st.markdown("""
     <div style="text-align:center; padding: 60px 20px; color: #555;">
@@ -194,7 +159,6 @@ if not st.session_state.messages:
     </div>
     """, unsafe_allow_html=True)
 
-# ── Display chat history ──────────────────────────────────────────────────────
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         if message["role"] == "assistant":
