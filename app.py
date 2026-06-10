@@ -1,10 +1,10 @@
 import streamlit as st
 import os
+import traceback
 
 # ── Inject secrets before any imports ────────────────────────────────────────
 os.environ["GOOGLE_API_KEY"]  = st.secrets.get("GOOGLE_API_KEY",  os.getenv("GOOGLE_API_KEY", ""))
 os.environ["TAVILY_API_KEY"]  = st.secrets.get("TAVILY_API_KEY",  os.getenv("TAVILY_API_KEY", ""))
-os.environ["GROQ_API_KEY"]    = st.secrets.get("GROQ_API_KEY",    os.getenv("GROQ_API_KEY", ""))
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -19,7 +19,7 @@ if not os.path.exists("./chroma_db"):
             ingest_documents()
             st.success("✅ Knowledge base ready!")
         except Exception as e:
-            st.warning(f"⚠️ Auto-ingest failed: {e}")
+            st.warning(f"⚠️ Auto-ingest failed: {traceback.format_exc()}")
 
 # ── Page Config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -126,7 +126,7 @@ with st.sidebar:
                 ingest_documents()
                 st.success("✅ Knowledge base updated!")
             except Exception as e:
-                st.error(f"❌ {e}")
+                st.error(f"❌ {traceback.format_exc()}")
 
     st.divider()
     st.markdown("""
@@ -212,11 +212,12 @@ if prompt := st.chat_input("Ask anything..."):
                 })
 
             except Exception as e:
-                err_msg = str(e)
-                st.error(f"❌ Error: {err_msg}")
+                # ── Full traceback shown on screen ────────────────────────
+                full_error = traceback.format_exc()
+                st.error(f"❌ Full Error:\n\n```\n{full_error}\n```")
                 st.session_state.messages.append({
                     "role": "assistant",
-                    "content": f"❌ Error: {err_msg}",
+                    "content": f"❌ Error: {str(e)}",
                     "workflow_steps": [],
                     "sources": []
                 })
