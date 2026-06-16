@@ -1,223 +1,292 @@
-import streamlit as st
 import os
 import traceback
+import concurrent.futures
 
-# ── Inject secrets before any imports ────────────────────────────────────────
-os.environ["GOOGLE_API_KEY"]  = st.secrets.get("GOOGLE_API_KEY",  os.getenv("GOOGLE_API_KEY", ""))
-os.environ["TAVILY_API_KEY"]  = st.secrets.get("TAVILY_API_KEY",  os.getenv("TAVILY_API_KEY", ""))
-
+import streamlit as st
 from dotenv import load_dotenv
-load_dotenv()
 
-from rag_pipeline import run_pipeline
-from ingest import ingest_documents
-
-# ── Auto-ingest if chroma_db missing ─────────────────────────────────────────
-if not os.path.exists("./chroma_db"):
-    with st.spinner("⚙️ Building knowledge base from documents..."):
-        try:
-            ingest_documents()
-            st.success("✅ Knowledge base ready!")
-        except Exception as e:
-            st.warning(f"⚠️ Auto-ingest failed: {traceback.format_exc()}")
-
-# ── Page Config ───────────────────────────────────────────────────────────────
+# ---------------- PAGE CONFIG ----------------
 st.set_page_config(
-    page_title="Smart Self-Correcting AI",
-    page_icon="🧠",
+    page_title="Smart Self Correcting AI (Self-RAG and C-RAG)",
+    page_icon="🤖",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# ── CSS ───────────────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-.stApp { background-color: #0d0d0d; color: #ececec; }
-#MainMenu, footer, header { visibility: hidden; }
+# ---------------- ENV / SECRETS ----------------
+load_dotenv()
 
-[data-testid="stSidebar"] {
-    background-color: #111111;
-    border-right: 1px solid #222;
-}
-[data-testid="stChatMessage"] {
-    background-color: #1a1a1a;
-    border-radius: 12px;
-    padding: 12px 16px;
-    margin-bottom: 8px;
-    border: 1px solid #2a2a2a;
-}
-[data-testid="stChatInput"] {
-    position: fixed;
-    bottom: 0;
-    background-color: #0d0d0d;
-    padding: 12px 0;
-    border-top: 1px solid #222;
-    z-index: 999;
-}
-[data-testid="stChatInput"] textarea {
-    background-color: #1e1e1e !important;
-    border: 1px solid #333 !important;
-    border-radius: 12px !important;
-    color: #fff !important;
-    font-size: 15px !important;
-}
-[data-testid="stVerticalBlock"] { padding-bottom: 100px; }
-.step-box {
-    background: #161b2e;
-    border-left: 3px solid #3b82f6;
-    padding: 8px 14px;
-    margin: 5px 0;
-    border-radius: 6px;
-    font-size: 0.83em;
-    color: #93c5fd;
-    font-family: 'Courier New', monospace;
-}
-.source-box {
-    background: #1a1a1a;
-    border: 1px solid #2d2d2d;
-    padding: 6px 12px;
-    margin: 4px 0;
-    border-radius: 6px;
-    font-size: 0.82em;
-    color: #86efac;
-}
-[data-testid="stExpander"] {
-    background-color: #161616;
-    border: 1px solid #2a2a2a;
-    border-radius: 8px;
-}
-.stButton > button {
-    background-color: #1d4ed8;
-    color: white;
-    border: none;
-    border-radius: 8px;
-    font-weight: 600;
-    transition: background 0.2s;
-}
-.stButton > button:hover { background-color: #2563eb; }
-.stChatFloatingInputContainer {
-    background-color: #0d0d0d !important;
-    border-top: 1px solid #222 !important;
-}
-.stChatInputContainer {
-    background-color: #1e1e1e !important;
-    border: 1px solid #333 !important;
-    border-radius: 12px !important;
-}
-.main, .block-container { background-color: #0d0d0d !important; }
-.stSuccess { background-color: #052e16 !important; }
-.stError { background-color: #2d0a0a !important; }
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: #111; }
-::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
-</style>
-""", unsafe_allow_html=True)
+try:
+    GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY", os.getenv("GOOGLE_API_KEY", ""))
+    TAVILY_API_KEY = st.secrets.get("TAVILY_API_KEY", os.getenv("TAVILY_API_KEY", ""))
+except Exception:
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+    TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
+if GOOGLE_API_KEY:
+    os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
+
+if TAVILY_API_KEY:
+    os.environ["TAVILY_API_KEY"] = TAVILY_API_KEY
+
+
+# ---------------- SAFE IMPORTS ----------------
+try:
+    from rag_pipeline import run_pipeline
+    PIPELINE_IMPORT_ERROR = None
+except Exception:
+    run_pipeline = None
+    PIPELINE_IMPORT_ERROR = traceback.format_exc()
+
+try:
+    from ingest import ingest_documents
+    INGEST_IMPORT_ERROR = None
+except Exception:
+    ingest_documents = None
+    INGEST_IMPORT_ERROR = traceback.format_exc()
+
+
+# ---------------- HELPERS ----------------
+@st.cache_resource
+def get_executor():
+    return concurrent.futures.ThreadPoolExecutor(max_workers=2)
+
+
+def run_pipeline_with_timeout(question: str, timeout_seconds: int = 90):
+    """
+    Prevents infinite 'Thinking...' state.
+    If pipeline takes too long, app shows a timeout message.
+    """
+    executor = get_executor()
+    future = executor.submit(run_pipeline, question)
+    return future.result(timeout=timeout_seconds)
+
+
+def normalize_result(result):
+    """
+    Accepts different pipeline result formats safely.
+    """
+    if not isinstance(result, dict):
+        return {
+            "generation": str(result),
+            "documents": [],
+            "workflow_steps": [],
+        }
+
+    return {
+        "generation": result.get("generation")
+        or result.get("answer")
+        or result.get("response")
+        or "No answer generated.",
+        "documents": result.get("documents") or result.get("sources") or [],
+        "workflow_steps": result.get("workflow_steps") or [],
+    }
+
+
+def show_sources(documents):
+    seen = set()
+
+    for doc in documents:
+        try:
+            source = doc.metadata.get("source", "Vector Store")
+        except Exception:
+            source = str(doc)
+
+        if source not in seen:
+            seen.add(source)
+            st.markdown(f"- {source}")
+
+
+# ---------------- SIDEBAR ----------------
 with st.sidebar:
-    st.markdown("## 🧠 Smart RAG AI")
-    st.caption("Self-RAG · CRAG · LangGraph")
+    st.title("🤖 Smart Self Correcting AI")
+    st.caption("Self-RAG and C-RAG")
+    st.divider()
+
+    st.subheader("System Status")
+
+    if os.getenv("GOOGLE_API_KEY"):
+        st.success("GOOGLE_API_KEY loaded")
+    else:
+        st.error("GOOGLE_API_KEY missing")
+
+    if os.getenv("TAVILY_API_KEY"):
+        st.success("TAVILY_API_KEY loaded")
+    else:
+        st.warning("TAVILY_API_KEY missing — web search fallback disabled")
+
+    if run_pipeline is None:
+        st.error("Pipeline import failed")
+    else:
+        st.success("Pipeline loaded")
+
+    if ingest_documents is None:
+        st.warning("Ingest file not loaded")
+
     st.divider()
 
     if st.button("⚙️ Process Documents", type="primary", use_container_width=True):
-        with st.spinner("Processing documents..."):
-            try:
-                ingest_documents()
-                st.success("✅ Knowledge base updated!")
-            except Exception as e:
-                st.error(f"❌ {traceback.format_exc()}")
-
-    st.divider()
-    st.markdown("""
-    **Pipeline Info**
-    - 🤖 Model: `Gemini 1.5 Flash`
-    - 🗄️ Vector DB: `ChromaDB`
-    - 🌐 Web Search: `Tavily`
-    - 🔗 Framework: `LangGraph`
-    """)
-    st.divider()
+        if ingest_documents is None:
+            st.error("ingest.py could not be imported.")
+            if INGEST_IMPORT_ERROR:
+                st.code(INGEST_IMPORT_ERROR)
+        else:
+            with st.spinner("Processing documents..."):
+                try:
+                    ingest_documents()
+                    st.success("Knowledge base updated successfully.")
+                except Exception:
+                    st.error("Document processing failed.")
+                    st.code(traceback.format_exc())
 
     if st.button("🗑️ Clear Chat", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
 
-# ── Main Chat Area ────────────────────────────────────────────────────────────
-st.markdown("## 🧠 Smart Self-Correcting AI")
-st.caption("Powered by Self-RAG & CRAG — watch the AI think, verify, and correct itself")
+    st.divider()
+
+    st.markdown(
+        """
+        **Project Info**
+        - Model: Gemini
+        - Method: Self-RAG and C-RAG
+        - Vector DB: ChromaDB
+        - Web Search: Tavily
+        - Framework: Streamlit
+        """
+    )
+
+
+# ---------------- MAIN UI ----------------
+st.title("Smart Self Correcting AI (Self-RAG and C-RAG)")
+st.caption(
+    "An intelligent chatbot using Self-RAG and C-RAG to retrieve, verify, correct, and generate accurate answers."
+)
 st.divider()
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-if not st.session_state.messages:
-    st.markdown("""
-    <div style="text-align:center; padding: 60px 20px; color: #555;">
-        <div style="font-size: 48px;">🧠</div>
-        <div style="font-size: 20px; font-weight: 600; color: #888; margin-top: 12px;">Ask me anything</div>
-        <div style="font-size: 14px; color: #444; margin-top: 8px;">I'll retrieve, verify, and self-correct my answers in real time</div>
-    </div>
-    """, unsafe_allow_html=True)
+if PIPELINE_IMPORT_ERROR:
+    st.error("Pipeline import error:")
+    st.code(PIPELINE_IMPORT_ERROR)
 
+
+# ---------------- DISPLAY OLD CHAT ----------------
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
-        if message["role"] == "assistant":
-            if message.get("workflow_steps"):
-                with st.expander("🔄 Reasoning Steps", expanded=False):
-                    for step in message["workflow_steps"]:
-                        st.markdown(f'<div class="step-box">{step}</div>', unsafe_allow_html=True)
-            st.markdown(message["content"])
-            if message.get("sources"):
-                with st.expander("📚 Sources", expanded=False):
-                    seen = set()
-                    for doc in message["sources"]:
-                        src = doc.metadata.get("source", "Vector Store")
-                        if src not in seen:
-                            seen.add(src)
-                            st.markdown(f'<div class="source-box">📄 {src}</div>', unsafe_allow_html=True)
-        else:
-            st.markdown(message["content"])
+        st.markdown(message["content"])
 
-# ── Chat Input ────────────────────────────────────────────────────────────────
-if prompt := st.chat_input("Ask anything..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
+        if message["role"] == "assistant" and message.get("workflow_steps"):
+            with st.expander("Reasoning Steps", expanded=False):
+                for step in message["workflow_steps"]:
+                    st.markdown(f"- {step}")
+
+        if message["role"] == "assistant" and message.get("sources"):
+            with st.expander("Sources", expanded=False):
+                show_sources(message["sources"])
+
+
+# ---------------- CHAT INPUT ----------------
+prompt = st.chat_input("Ask anything...")
+
+if prompt:
+    st.session_state.messages.append(
+        {
+            "role": "user",
+            "content": prompt,
+        }
+    )
+
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("🤔 Thinking..."):
-            try:
-                result = run_pipeline(prompt)
+        if run_pipeline is None:
+            answer = "Pipeline is not loaded. Please check the import error shown above."
+            st.error(answer)
 
-                with st.expander("🔄 Reasoning Steps", expanded=True):
-                    for step in result["workflow_steps"]:
-                        st.markdown(f'<div class="step-box">{step}</div>', unsafe_allow_html=True)
-
-                st.markdown(result["generation"])
-
-                if result["documents"]:
-                    with st.expander("📚 Sources", expanded=False):
-                        seen = set()
-                        for doc in result["documents"]:
-                            src = doc.metadata.get("source", "Vector Store")
-                            if src not in seen:
-                                seen.add(src)
-                                st.markdown(f'<div class="source-box">📄 {src}</div>', unsafe_allow_html=True)
-
-                st.session_state.messages.append({
+            st.session_state.messages.append(
+                {
                     "role": "assistant",
-                    "content": result["generation"],
-                    "workflow_steps": result["workflow_steps"],
-                    "sources": result["documents"]
-                })
-
-            except Exception as e:
-                # ── Full traceback shown on screen ────────────────────────
-                full_error = traceback.format_exc()
-                st.error(f"❌ Full Error:\n\n```\n{full_error}\n```")
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": f"❌ Error: {str(e)}",
+                    "content": answer,
                     "workflow_steps": [],
-                    "sources": []
-                })
+                    "sources": [],
+                }
+            )
+
+        elif not os.getenv("GOOGLE_API_KEY"):
+            answer = "GOOGLE_API_KEY is missing. Add it in Streamlit Secrets."
+            st.error(answer)
+
+            st.session_state.messages.append(
+                {
+                    "role": "assistant",
+                    "content": answer,
+                    "workflow_steps": [],
+                    "sources": [],
+                }
+            )
+
+        else:
+            with st.spinner("Thinking..."):
+                try:
+                    raw_result = run_pipeline_with_timeout(prompt, timeout_seconds=90)
+                    result = normalize_result(raw_result)
+
+                    answer = result["generation"]
+                    steps = result["workflow_steps"]
+                    documents = result["documents"]
+
+                    st.markdown(answer)
+
+                    if steps:
+                        with st.expander("Reasoning Steps", expanded=False):
+                            for step in steps:
+                                st.markdown(f"- {step}")
+
+                    if documents:
+                        with st.expander("Sources", expanded=False):
+                            show_sources(documents)
+
+                    st.session_state.messages.append(
+                        {
+                            "role": "assistant",
+                            "content": answer,
+                            "workflow_steps": steps,
+                            "sources": documents,
+                        }
+                    )
+
+                except concurrent.futures.TimeoutError:
+                    answer = (
+                        "The chatbot took too long to respond. "
+                        "This usually happens when the model, embeddings, vector database, or web search is slow. "
+                        "Please try again with a shorter question."
+                    )
+
+                    st.error(answer)
+
+                    st.session_state.messages.append(
+                        {
+                            "role": "assistant",
+                            "content": answer,
+                            "workflow_steps": [],
+                            "sources": [],
+                        }
+                    )
+
+                except Exception:
+                    full_error = traceback.format_exc()
+
+                    st.error("Pipeline error occurred.")
+                    st.code(full_error)
+
+                    st.session_state.messages.append(
+                        {
+                            "role": "assistant",
+                            "content": "Pipeline error occurred. Check the error shown above.",
+                            "workflow_steps": [],
+                            "sources": [],
+                        }
+                    )
